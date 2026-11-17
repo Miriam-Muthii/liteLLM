@@ -1,0 +1,7 @@
+# MIRIAM LiteLLM Project — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+requests>=2.31.0        # HTTP client for API calls to LiteLLM
+python-dotenv>=1.0.0    # Load .env variables
+openai>=1.12.0          # OpenAI-compatible SDK (works with LiteLLM)
+litellm>=1.40.0         # LiteLLM SDK (optional — for direct SDK use)

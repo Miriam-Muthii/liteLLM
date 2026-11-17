@@ -1,0 +1,154 @@
+# =============================================================================
+# MIRIAM LiteLLM Gateway — Docker Compose
+# =============================================================================
+# Services:
+#   - litellm        : The AI gateway proxy (port 4000)
+#   - postgres       : Database for keys, teams, spend tracking
+#   - prometheus     : Metrics collection
+#   - grafana        : Visual monitoring dashboard (port 3000)
+# =============================================================================
+# Commands:
+#   Start:   docker-compose up -d
+#   Stop:    docker-compose down
+#   Logs:    docker-compose logs -f litellm
+#   Restart: docker-compose restart litellm
+# =============================================================================
+
+version: "3.8"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # LITELLM PROXY — The main AI Gateway
+  # ---------------------------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: miriam-litellm
+    ports:
+      - "4000:4000"           # API + Admin UI endpoint
+    volumes:
+      - ./config/litellm_config.yaml:/app/config.yaml:ro   # Mount config (read-only)
+    env_file:
+      - .env                  # Load all environment variables
+    command: >
+      --config /app/config.yaml
+      --port 4000
+      --detailed_debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Allows LiteLLM to reach Ollama on your Windows host
+    restart: unless-stopped
+    networks:
+      - miriam-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+  # ---------------------------------------------------------------------------
+  # POSTGRESQL — Stores API keys, teams, spend data, audit logs
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: miriam-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # Persistent storage
+    ports:
+      - "5432:5432"           # Expose for direct DB access if needed
+    restart: unless-stopped
+    networks:
+      - miriam-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # ---------------------------------------------------------------------------
+  # PROMETHEUS — Scrapes metrics from LiteLLM
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: miriam-prometheus
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"    # Keep 30 days of metrics
+    restart: unless-stopped
+    networks:
+      - miriam-net
+
+
+  # ---------------------------------------------------------------------------
+  # GRAFANA — Visual monitoring dashboard (like what supervisor showed)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: miriam-grafana
+    ports:
+      - "3001:3000"           # Access dashboard at http://localhost:3001
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning   # Auto-load dashboards
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - miriam-net
+
+
+  # ---------------------------------------------------------------------------
+  # REDIS — Shared rate limit state (enable when scaling LiteLLM horizontally)
+  # Uncomment this block when you deploy multiple LiteLLM containers
+  # ---------------------------------------------------------------------------
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: miriam-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+  #   networks:
+  #     - miriam-net
+
+
+# =============================================================================
+# VOLUMES — Persistent data storage
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  # redis_data:
+  #   driver: local
+
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  miriam-net:
+    driver: bridge

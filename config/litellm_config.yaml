@@ -1,0 +1,231 @@
+# =============================================================================
+# LiteLLM PROXY CONFIGURATION
+# Project: MIRIAM LiteLLM Gateway
+# =============================================================================
+# This config sets up:
+#   - Multiple LLM backends (Ollama, vLLM) with load balancing
+#   - Whisper audio transcription routing
+#   - Per-team API key management
+#   - RPM/TPM rate limiting per model
+#   - Cost tracking per model
+#   - Fallback routing (if one server goes down, routes to next)
+# =============================================================================
+
+model_list:
+
+  # ---------------------------------------------------------------------------
+  # LOCAL TEST MODEL — points to Ollama on the host machine (Windows)
+  # Works when Ollama is running locally: https://ollama.ai/download
+  # Run: ollama pull gemma3:2b   then   docker-compose up -d
+  # ---------------------------------------------------------------------------
+  - model_name: local-gemma
+    litellm_params:
+      model: ollama/gemma3:2b
+      api_base: http://host.docker.internal:11434   # Docker → host machine Ollama
+      rpm: 30
+      tpm: 50000
+    model_info:
+      description: "Gemma 3 2B — Local Ollama on host (for testing)"
+
+  # ---------------------------------------------------------------------------
+  # CHAT / TEXT MODELS — Load balanced across multiple backends
+  # Each entry with the SAME model_name = auto load balanced by LiteLLM
+  # ---------------------------------------------------------------------------
+
+  # PRIMARY: Gemma via Ollama (Server 1 — South Africa)
+  - model_name: gemma
+    litellm_params:
+      model: ollama/gemma3
+      api_base: http://ollama-sa-1:11434     # SA Server 1
+      rpm: 60                                 # max 60 requests/min on this backend
+      tpm: 100000                             # max 100k tokens/min on this backend
+    model_info:
+      description: "Gemma 3 — SA Server 1 (Primary)"
+      region: "south-africa"
+
+  # SECONDARY: Gemma via Ollama (Server 2 — SA) — load balances with Server 1
+  - model_name: gemma
+    litellm_params:
+      model: ollama/gemma3
+      api_base: http://ollama-sa-2:11434     # SA Server 2
+      rpm: 60
+      tpm: 100000
+    model_info:
+      description: "Gemma 3 — SA Server 2 (Secondary load balance)"
+      region: "south-africa"
+
+  # TERTIARY: Gemma via vLLM (faster inference — use as priority backend)
+  - model_name: gemma
+    litellm_params:
+      model: openai/google/gemma-3
+      api_base: http://vllm-sa-1:8000/v1    # vLLM server (fastest)
+      api_key: fake                          # vLLM doesn't need a real key
+      rpm: 80
+      tpm: 150000
+    model_info:
+      description: "Gemma 3 — vLLM SA (High throughput)"
+      region: "south-africa"
+
+  # UK REGION: Gemma via Ollama (UK Server 1)
+  - model_name: gemma-uk
+    litellm_params:
+      model: ollama/gemma3
+      api_base: http://ollama-uk-1:11434     # UK Server 1
+      rpm: 60
+      tpm: 100000
+    model_info:
+      description: "Gemma 3 — UK Server 1"
+      region: "united-kingdom"
+
+  # UK REGION: Gemma via Ollama (UK Server 2 — load balances with UK-1)
+  - model_name: gemma-uk
+    litellm_params:
+      model: ollama/gemma3
+      api_base: http://ollama-uk-2:11434     # UK Server 2
+      rpm: 60
+      tpm: 100000
+    model_info:
+      description: "Gemma 3 — UK Server 2"
+      region: "united-kingdom"
+
+  # ---------------------------------------------------------------------------
+  # QWEN — Optimised for Eastern languages (Chinese, Japanese, Korean)
+  # Used by Princess Cruises translation pipeline
+  # ---------------------------------------------------------------------------
+  - model_name: qwen-translation
+    litellm_params:
+      model: ollama/qwen2.5
+      api_base: http://ollama-sa-1:11434
+      rpm: 75
+      tpm: 145000
+    model_info:
+      description: "Qwen 2.5 — Optimised for Eastern language translation"
+      region: "south-africa"
+
+  - model_name: qwen-translation
+    litellm_params:
+      model: ollama/qwen2.5
+      api_base: http://ollama-sa-2:11434
+      rpm: 75
+      tpm: 145000
+    model_info:
+      description: "Qwen 2.5 — SA Server 2 fallback"
+      region: "south-africa"
+
+  # ---------------------------------------------------------------------------
+  # WHISPER — Audio Transcription (Speech-to-Text)
+  # Whisper is served as an OpenAI-compatible endpoint via faster-whisper-server
+  # This decouples the model weights from the calling code — 
+  # solving the shared infrastructure evidencing problem.
+  # ---------------------------------------------------------------------------
+  - model_name: whisper-transcription
+    litellm_params:
+      model: openai/whisper-1
+      api_base: http://whisper-server:8000/v1   # faster-whisper-server endpoint
+      api_key: fake
+      rpm: 20
+      tpm: 50000
+    model_info:
+      description: "Whisper — Distil-v3 Turbo via faster-whisper-server"
+      mode: "audio_transcription"
+
+  # UK-specific Whisper instance (for UK client)
+  - model_name: whisper-transcription-uk
+    litellm_params:
+      model: openai/whisper-1
+      api_base: http://whisper-uk-1:8000/v1    # UK whisper server
+      api_key: fake
+      rpm: 20
+      tpm: 50000
+    model_info:
+      description: "Whisper — UK Server (for UK client transcription)"
+      mode: "audio_transcription"
+      region: "united-kingdom"
+
+  # ---------------------------------------------------------------------------
+  # FALLBACK MODEL — if all primary backends fail
+  # Points to a stable always-on small model
+  # ---------------------------------------------------------------------------
+  - model_name: fallback-model
+    litellm_params:
+      model: ollama/gemma3:2b              # smallest/fastest Gemma variant
+      api_base: http://ollama-sa-1:11434
+      rpm: 100
+      tpm: 200000
+    model_info:
+      description: "Fallback — Gemma 3 2B (lightweight, always available)"
+
+
+# =============================================================================
+# ROUTER SETTINGS — Controls how traffic is distributed
+# =============================================================================
+router_settings:
+  routing_strategy: least-busy            # Routes to backend with fewest active requests
+                                          # Other options: simple-shuffle, latency-based-routing
+                                          # usage-based-routing, cost-based-routing
+
+  num_retries: 3                          # Retry failed requests 3 times
+  timeout: 30                             # 30 second timeout per request
+  retry_after: 5                          # Wait 5s before retrying
+
+  # Fallback: if 'gemma' fails, try 'fallback-model'
+  fallbacks:
+    - gemma: ["fallback-model"]
+    - gemma-uk: ["fallback-model"]
+    - qwen-translation: ["fallback-model"]
+
+  # Context window fallback: if prompt is too long for primary, try secondary
+  context_window_fallbacks:
+    - gemma: ["fallback-model"]
+
+  # Redis for sharing rate limit state across multiple LiteLLM instances
+  # (Uncomment when scaling to multiple LiteLLM proxy containers)
+  # redis_host: redis
+  # redis_port: 6379
+  # redis_password: ""
+
+
+# =============================================================================
+# LITELLM SETTINGS — Global proxy behaviour
+# =============================================================================
+litellm_settings:
+  # Drop unsupported params instead of erroring (useful across different backends)
+  drop_params: true
+
+  # Cache responses to reduce load on backends (requires Redis)
+  # cache: true
+  # cache_params:
+  #   type: redis
+  #   host: redis
+  #   port: 6379
+  #   ttl: 600                            # Cache for 10 minutes
+
+  # Logging callbacks — uncomment to enable
+  # callbacks: ["langfuse"]              # Detailed request tracing
+  # success_callback: ["langfuse"]
+  # failure_callback: ["langfuse"]
+
+  # Request/response logging to Postgres (for audit trail)
+  # store_audit_logs: true
+
+
+# =============================================================================
+# GENERAL SETTINGS — Master key, database, admin UI
+# =============================================================================
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY   # Set in .env — required for all API calls
+  database_url: os.environ/DATABASE_URL        # Postgres for spend tracking & key storage
+
+  # Global rate limits (applies to all models unless overridden per-model)
+  # tpm_limit: 500000
+  # rpm_limit: 500
+
+  # Disable LiteLLM telemetry (recommended for security-conscious orgs)
+  telemetry: false
+
+  # Allow requests from these IPs only (uncomment to restrict access)
+  # allowed_ips: ["10.0.0.0/8", "192.168.0.0/16"]
+
+  # Alerting — get notified when spend exceeds threshold
+  # alerting: ["slack"]
+  # alerting_threshold: 1000             # Alert when spend hits $1000

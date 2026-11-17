@@ -1,0 +1,16 @@
+# NEVER commit these to Git
+.env
+teams/generated_keys.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# Docker volumes (auto-created)
+postgres_data/
+grafana_data/
+prometheus_data/

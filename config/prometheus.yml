@@ -1,0 +1,17 @@
+# =============================================================================
+# Prometheus Configuration — Scrapes LiteLLM metrics
+# =============================================================================
+global:
+  scrape_interval: 15s          # Scrape every 15 seconds
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "litellm"
+    static_configs:
+      - targets: ["litellm:4000"]   # LiteLLM exposes /metrics endpoint
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
